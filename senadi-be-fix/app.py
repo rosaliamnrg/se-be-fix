@@ -324,7 +324,7 @@ def process_documents_from_uploads_github(deleted_filename = None):
     repo = os.getenv("GITHUB_REPO")
     github_path = os.getenv("GITHUB_FOLDER_PATH")
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json"
     }
     
@@ -410,7 +410,7 @@ def process_documents_from_uploads_github(deleted_filename = None):
 #             print("Loading existing FAISS index...")
 #             try:
 #                 # Use GoogleGenerativeAIEmbeddings as default - more reliable
-#                 embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY)
+#                 embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=GOOGLE_API_KEY)
 #                 vector_store = FAISS.load_local(VECTOR_STORE_FOLDER_PATH, embeddings, allow_dangerous_deserialization=True)
 #                 print("Successfully loaded FAISS index with GoogleGenerativeAIEmbeddings")
 #             except Exception as load_error:
@@ -431,7 +431,7 @@ def process_documents_from_uploads_github(deleted_filename = None):
             
 #             # Use GoogleGenerativeAIEmbeddings as default
 #             try:
-#                 embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY)
+#                 embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=GOOGLE_API_KEY)
 #                 vector_store = FAISS.from_documents(documents, embeddings)
 #                 print("Created FAISS index with GoogleGenerativeAIEmbeddings")
                 
@@ -498,7 +498,7 @@ def process_documents_from_uploads_github(deleted_filename = None):
 #         return False
 
 def initialize_vector_store_qdrant():
-    MODEL_NAME = 'gemini-1.5-flash'
+    MODEL_NAME = 'gemini-3.5-flash'
     # global vector_store, qa_chain
     if app.config.get("qa_chain", False):
         return  # ✅ Sudah siap, skip semua
@@ -508,56 +508,59 @@ def initialize_vector_store_qdrant():
             url=os.getenv("QDRANT_URL"),
             api_key=os.getenv("QDRANT_API_KEY"),
             prefer_grpc=False,
-            timeout=60
+            timeout=60,
+            check_compatibility=False
         )
         collection_name = os.getenv("QDRANT_COLLECTION")
 
         embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             google_api_key=GOOGLE_API_KEY
         )
 
-        # Cek apakah collection sudah ada
-        # if not qdrant_client.collection_exists(collection_name):
-        #     print(f"[Qdrant] Collection '{collection_name}' not found. Creating...")
-        #     qdrant_client.create_collection(
-        #         collection_name=collection_name,
-        #         vectors_config={"dense" : VectorParams(size=768, distance=Distance.COSINE)},
-        #     )
+        if not qdrant_client.collection_exists(collection_name):
+            print(f"[Qdrant] Collection '{collection_name}' NOT FOUND. Creating & loading data...")
 
-        #     try:
-        #         qdrant_client.create_payload_index(
-        #             collection_name=collection_name,
-        #             field_name="metadata.file_name",
-        #             field_schema=PayloadSchemaType.KEYWORD
-        #         )
-        #     except Exception as e:
-        #         print(f"[Qdrant] Payload index error: {e}")
-            
-        #     vector_store = QdrantVectorStore(
-        #         client=qdrant_client,
-        #         collection_name=collection_name,
-        #         embedding=embeddings,
-        #         retrieval_mode=RetrievalMode.DENSE,
-        #         vector_name="dense",
-        #     )
-            
-        #     print("Memproses dokumen dari Github")
-        #     documents = process_documents_from_uploads_github()
-        #     # vector_store.add_documents(documents)
-        #     process_documents_and_add_to_qdrant(vector_store, documents, batch_size=3)
-        #     print("Berhasil menyimpan dokumen Github ke Qdrant")
+            from qdrant_client.models import VectorParams, Distance
 
-        # else:
-        print(f"[Qdrant] Collection {collection_name} already exist. Loading collection")
-        
-        vector_store = QdrantVectorStore(
-            client=qdrant_client,
-            collection_name=collection_name,
-            embedding=embeddings,
-            retrieval_mode=RetrievalMode.DENSE,
-            vector_name="dense",
-        )
+            qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=3072,
+                    distance=Distance.COSINE
+                )
+            )
+
+            vector_store = QdrantVectorStore(
+                client=qdrant_client,
+                collection_name=collection_name,
+                embedding=embeddings,
+                retrieval_mode=RetrievalMode.DENSE,
+                vector_name="",
+            )
+
+            # 🔥 TAMBAH: LOAD DATA ULANG
+            print("Memproses dokumen...")
+            documents = process_documents_from_uploads_github()
+
+            process_documents_and_add_to_qdrant(
+                vector_store,
+                documents,
+                batch_size=3
+            )
+
+            print("Berhasil menyimpan dokumen ke Qdrant")
+
+        else:
+            print(f"[Qdrant] Collection '{collection_name}' ditemukan. Loading...")
+
+            vector_store = QdrantVectorStore(
+                client=qdrant_client,
+                collection_name=collection_name,
+                embedding=embeddings,
+                retrieval_mode=RetrievalMode.DENSE,
+                vector_name="",
+            )
 
         # QA Chain
         retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 10})
@@ -1059,7 +1062,7 @@ def create_chat():
 @jwt_required()
 def chat(chat_id):
     # global qa_chain
-    MODEL_NAME = 'gemini-1.5-flash'
+    MODEL_NAME = 'gemini-3.5-flash'
     if "qa_chain" not in app.config:
         initialize_vector_store_qdrant()
     qa_chain = app.config["qa_chain"]
@@ -1615,7 +1618,7 @@ def admin_get_file():
 #         documents = process_documents_from_uploads(deleted_filename = filename)
 
 #         if documents:
-#             embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY)
+#             embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=GOOGLE_API_KEY)
 #             vector_store = FAISS.from_documents(documents, embeddings)
 #             vector_store.save_local(VECTOR_STORE_FOLDER_PATH)
 #             print("Vector store updated and saved after upload")
@@ -1676,7 +1679,7 @@ def admin_get_file():
 @app.route('/admin/delete_github/<path:filename>', methods=['GET'])
 @jwt_required()
 def admin_delete_file_github(filename):
-    MODEL_NAME = 'gemini-1.5-flash'
+    MODEL_NAME = 'gemini-3.5-flash'
     # global qa_chain, vector_store
     qa_chain = app.config.get('qa_chain')
     vector_store = app.config.get('vector_store')
@@ -1703,6 +1706,12 @@ def admin_delete_file_github(filename):
             timeout = 60
         )
         collection_name = os.getenv("QDRANT_COLLECTION")
+
+        qdrant_client.create_payload_index(
+            collection_name=collection_name,
+            field_name="metadata.file_name",
+            field_schema="keyword"
+        )
 
         delete_filter = FilterSelector(
         filter = Filter(
@@ -1739,7 +1748,7 @@ def admin_delete_file_github(filename):
         github_path = os.getenv("GITHUB_FOLDER_PATH")
         github_api_url = f"https://api.github.com/repos/{repo}/contents/{github_path}/{filename}"
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"token {token}",
             "Accept": "application/vnd.github+json"
         }
 
@@ -1897,7 +1906,7 @@ def admin_get_chat_plural(chat_id):
 @app.route('/upload_github', methods=['POST'])
 @jwt_required()
 def upload_file_github():
-    MODEL_NAME = 'gemini-2.0-flash'
+    MODEL_NAME = 'gemini-3.5-flash'
     
     # global qa_chain, vector_store
     qa_chain = app.config.get('qa_chain')
@@ -1965,7 +1974,7 @@ def upload_file_github():
             if new_documents:
                 # Inisialisasi embedding
                 embeddings = GoogleGenerativeAIEmbeddings(
-                    model="models/text-embedding-004",
+                    model="models/gemini-embedding-001",
                     google_api_key=GOOGLE_API_KEY
                 )
 
@@ -2055,7 +2064,7 @@ def upload_file_github():
 
             encoded_content = base64.b64encode(file_bytes).decode("utf-8")
             headers = {
-                "Authorization": f"Bearer {token}",
+                "Authorization": f"token {token}",
                 "Accept": "application/vnd.github+json"
             }
             data = {
@@ -2204,7 +2213,7 @@ def upload_file_github():
 #         documents = process_documents_from_uploads()
 
 #         if documents:
-#             embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY)
+#             embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=GOOGLE_API_KEY)
 #             vector_store = FAISS.from_documents(documents, embeddings)
 #             vector_store.save_local(VECTOR_STORE_FOLDER_PATH)
 #             print("Vector store updated and saved after upload")
@@ -2399,8 +2408,8 @@ def get_chats():
         cursor.execute(
             """
             SELECT c.id, c.title, c.created_at, c.verified, c.verified_at,
-                   (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id) as message_count,
-                   (SELECT message FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message
+                (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id) as message_count,
+                (SELECT message FROM messages m WHERE m.chat_id = c.id ORDER BY m.created_at DESC LIMIT 1) as last_message
             FROM chats c
             WHERE c.user_id = %s
             ORDER BY c.created_at DESC
@@ -2433,6 +2442,7 @@ def get_chats():
         print(f"Get chats error: {str(e)}")
         print(traceback.format_exc())
         return jsonify({"error": str(e)}), 500
+
     finally:
         try:
             cursor.close()
